@@ -9,10 +9,8 @@
 // It integrates with the existing AgentSight runner/analyzer framework
 // by implementing the Runner trait for event streaming.
 
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_stream::Stream;
 use futures::StreamExt;
 use log::{debug, info, warn, error};
 use async_trait::async_trait;

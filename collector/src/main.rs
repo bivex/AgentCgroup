@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 
 mod framework;
 mod server;
+mod cgroup;
 
 use framework::{
     binary_extractor::BinaryExtractor,
@@ -251,6 +252,39 @@ enum Commands {
         #[arg(long, default_value = "7395")]
         server_port: u16,
     },
+    /// eBPF-based cgroup resource control for AI coding agents
+    Cgroup {
+        /// Target agent PID to monitor
+        #[arg(short = 'p', long)]
+        pid: Option<u32>,
+        /// Command name filter (e.g., "claude", "cursor")
+        #[arg(short = 'c', long)]
+        comm: Option<String>,
+        /// Workload ID to assign (default: 1)
+        #[arg(short = 'w', long, default_value = "1")]
+        workload_id: u32,
+        /// Path to YAML config file
+        #[arg(long)]
+        config: Option<String>,
+        /// Prometheus metrics port
+        #[arg(long, default_value = "9090")]
+        metrics_port: u16,
+        /// Disable automatic degradation (throttle/freeze/kill)
+        #[arg(long)]
+        no_degrade: bool,
+        /// Pressure monitoring interval (ms)
+        #[arg(long, default_value = "500")]
+        monitor_interval: u64,
+        /// Dry-run mode (observe only, don't create cgroups)
+        #[arg(long)]
+        dry_run: bool,
+        /// Path to the agentcgroup BPF binary (auto-detected if omitted)
+        #[arg(long)]
+        binary_path: Option<String>,
+        /// Enable verbose BPF output
+        #[arg(short = 'v', long)]
+        verbose: bool,
+    },
 }
 
 #[tokio::main]
@@ -285,6 +319,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_trace(&binary_extractor, true, None, None, Some(comm), &ssl_filter_patterns, false, true, false, true, None, None, true, 2, &http_filter_patterns, false, binary_path.as_deref(), log_file, true, *rotate_logs, *max_log_size, true, *server_port).await.map_err(convert_runner_error)?
         },
         Commands::System { interval, pid, comm, no_children, cpu_threshold, memory_threshold, log_file, quiet, rotate_logs, max_log_size, server, server_port } => run_system(*interval, *pid, comm.as_deref(), !*no_children, *cpu_threshold, *memory_threshold, log_file, *quiet, *rotate_logs, *max_log_size, *server, *server_port).await.map_err(convert_runner_error)?,
+        Commands::Cgroup { pid, comm, workload_id, config, metrics_port, no_degrade, monitor_interval, dry_run, binary_path, verbose } => {
+            run_cgroup(&binary_extractor, *pid, comm.as_deref(), *workload_id, config.as_deref(), *metrics_port, !*no_degrade, *monitor_interval, *dry_run, binary_path.as_deref(), *verbose).await?
+        },
     }
     
     Ok(())
@@ -747,4 +784,83 @@ async fn start_web_server_if_enabled(
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     Ok(Some(server_handle))
+}
+
+/// Run the AgentCgroup eBPF-based resource controller daemon
+async fn run_cgroup(
+    binary_extractor: &BinaryExtractor,
+    pid: Option<u32>,
+    comm: Option<&str>,
+    workload_id: u32,
+    config_path: Option<&str>,
+    metrics_port: u16,
+    auto_degrade: bool,
+    monitor_interval_ms: u64,
+    dry_run: bool,
+    binary_path: Option<&str>,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::cgroup::daemon::{Daemon, DaemonConfig};
+
+    println!("AgentCgroup - eBPF Resource Controller");
+    println!("{}", "=".repeat(60));
+
+    // Determine the agentcgroup binary path
+    let bpf_binary = match binary_path {
+        Some(path) => path.to_string(),
+        None => {
+            // Try to find agentcgroup binary alongside the other BPF binaries
+            let extractor_dir = std::path::Path::new(binary_extractor.get_process_path())
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/bin"));
+            let candidate = extractor_dir.join("agentcgroup");
+            if candidate.exists() {
+                candidate.to_string_lossy().to_string()
+            } else {
+                // Fall back to PATH lookup
+                "agentcgroup".to_string()
+            }
+        }
+    };
+
+    if dry_run {
+        println!("🔧 DRY-RUN mode: cgroups will NOT be created");
+    }
+    if let Some(p) = pid {
+        println!("🎯 Target PID: {}", p);
+    }
+    if let Some(c) = comm {
+        println!("🎯 Command filter: {}", c);
+    }
+    if let Some(cfg) = config_path {
+        println!("📄 Config: {}", cfg);
+    }
+    println!("📊 Metrics port: {}", metrics_port);
+    println!("🔧 Auto-degrade: {}", auto_degrade);
+    println!("🔧 Monitor interval: {}ms", monitor_interval_ms);
+    println!("🔧 BPF binary: {}", bpf_binary);
+    println!("{}", "=".repeat(60));
+
+    let daemon_config = DaemonConfig {
+        binary_path: bpf_binary,
+        config_path: config_path.map(|s| s.to_string()),
+        target_pid: pid,
+        comm_filter: comm.map(|s| s.to_string()),
+        workload_id: Some(workload_id),
+        metrics_port,
+        auto_degrade,
+        monitor_interval_ms,
+        dry_run,
+    };
+
+    let mut daemon = Daemon::new(daemon_config)?;
+
+    // Run the daemon (blocks until shutdown or error)
+    daemon.run().await?;
+
+    // Graceful cleanup
+    daemon.shutdown().await;
+
+    Ok(())
 }

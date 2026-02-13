@@ -1,0 +1,110 @@
+# AgentCgroup Configuration
+# =========================
+# Tool-call-aligned cgroup v2 resource management for AI coding agents.
+#
+# Memory values derived from empirical measurements (see docs/paper.txt):
+#   - Baseline idle agent:     ~185 MB RSS
+#   - file_edit tool call:     +12 MB  (P95)
+#   - bash tool call:          +45 MB  (P95)
+#   - npm install:             +380 MB (P95)
+#   - npm test:                +220 MB (P95)
+#   - git operations:          +35 MB  (P95)
+
+# Global defaults applied to all workloads unless overridden.
+global:
+  # Base memory for the agent process tree when idle (MB).
+  baseline_memory_mb: 185
+  # Memory.high soft limit for tool calls (MB).
+  # Kernel will throttle allocations above this, not kill.
+  tool_high_mb: 512
+  # Memory.max hard cap for tool calls (MB).
+  # OOM-kill if exceeded.
+  tool_max_mb: 768
+  # cpu.weight for the agent cgroup (1-10000, default=100).
+  cpu_weight: 100
+  # cpu.max quota (microseconds per period). 0 = unlimited.
+  cpu_max_us: 0
+  cpu_period_us: 100000
+
+# Per-workload (per-agent) policy overrides.
+workloads:
+  - name: claude-code
+    # Glob or exact match on the agent command name.
+    comm_filter: "claude"
+    baseline_memory_mb: 185
+    tool_high_mb: 512
+    tool_max_mb: 768
+    cpu_weight: 100
+
+    # Graceful degradation ladder.
+    degradation:
+      # Percentage of memory.high at which each level triggers.
+      soft_throttle_pct: 85      # Reduce memory.high to 85%
+      hard_throttle_pct: 95      # Reduce memory.high to 70%
+      freeze_pct: 100            # Freeze the cgroup (cgroup.freeze=1)
+      terminate_pct: 110         # Kill the cgroup (cgroup.kill=1)
+
+  - name: cursor-agent
+    comm_filter: "cursor"
+    baseline_memory_mb: 200
+    tool_high_mb: 640
+    tool_max_mb: 1024
+    cpu_weight: 80
+    degradation:
+      soft_throttle_pct: 85
+      hard_throttle_pct: 95
+      freeze_pct: 100
+      terminate_pct: 110
+
+# Per-tool-type resource profiles.
+# Override memory limits for specific tool types.
+tool_profiles:
+  bash:
+    memory_high_mb: 256
+    memory_max_mb: 512
+    priority: medium
+
+  build:
+    memory_high_mb: 512
+    memory_max_mb: 768
+    priority: low    # builds are background work
+
+  test:
+    memory_high_mb: 384
+    memory_max_mb: 640
+    priority: low
+
+  install:
+    memory_high_mb: 512
+    memory_max_mb: 768
+    priority: low
+
+  git:
+    memory_high_mb: 128
+    memory_max_mb: 256
+    priority: medium
+
+  editor:
+    memory_high_mb: 64
+    memory_max_mb: 128
+    priority: high   # file edits should be fast
+
+  lint:
+    memory_high_mb: 256
+    memory_max_mb: 384
+    priority: medium
+
+  format:
+    memory_high_mb: 128
+    memory_max_mb: 256
+    priority: medium
+
+  python:
+    memory_high_mb: 384
+    memory_max_mb: 640
+    priority: medium
+
+  node:
+    memory_high_mb: 384
+    memory_max_mb: 640
+    priority: medium

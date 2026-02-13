@@ -11,6 +11,8 @@ AgentSight is a comprehensive observability framework designed specifically for 
 - **`bpf/`**: Core eBPF programs and C utilities
   - `process.bpf.c` & `process.c`: Process monitoring eBPF program with lifecycle tracking
   - `sslsniff.bpf.c` & `sslsniff.c`: SSL/TLS traffic monitoring eBPF program
+  - `agentcgroup.bpf.c` & `agentcgroup.c`: Tool-call-aligned cgroup v2 resource management
+  - `agentcgroup.h`: Shared BPF/userspace header with tool classification types
   - `test_process_utils.c`: Unit tests for process utilities
   - `Makefile`: Advanced build configuration with AddressSanitizer support
 - **`collector/`**: Rust-based streaming analysis framework
@@ -19,8 +21,17 @@ AgentSight is a comprehensive observability framework designed specifically for 
     - `runners/`: SSL, Process, and Fake data runners
     - `core/events.rs`: Standardized event system with JSON payloads
     - `binary_extractor.rs`: Embedded eBPF binary management
+  - `src/cgroup/`: AgentCgroup resource management module
+    - `types.rs`: Shared Rust types (Priority, ToolType, DegradationLevel, events)
+    - `manager.rs`: cgroup v2 filesystem management (create/destroy/degrade)
+    - `policy.rs`: YAML configuration parsing and policy evaluation
+    - `metrics.rs`: Prometheus metrics exposition (counters, gauges, histograms)
+    - `tracker.rs`: Runner impl bridging BPF events → cgroup operations
+    - `daemon.rs`: Top-level orchestrator (init → register → monitor → enforce)
   - `src/main.rs`: CLI entry point with multiple operation modes
   - `DESIGN.md`: Detailed framework architecture documentation
+- **`config/`**: Configuration examples
+  - `agentcgroup.example.yaml`: Example YAML config with paper-derived memory limits
 - **`frontend/`**: Next.js web interface for visualization
   - React/TypeScript frontend with timeline visualization
   - Real-time log parsing and event display
@@ -89,6 +100,12 @@ cd collector && cargo run process
 cd collector && cargo run trace --ssl --process --comm python --server
 cd collector && cargo run record --comm claude --server-port 7395
 
+# AgentCgroup resource control
+sudo ./agentsight cgroup --pid 12345 --comm claude          # Monitor + enforce for PID
+sudo ./agentsight cgroup --config config/agentcgroup.yaml   # Use YAML config
+sudo ./agentsight cgroup --pid 12345 --dry-run              # Observe-only mode
+sudo ./agentsight cgroup --pid 12345 --metrics-port 9090    # Custom metrics port
+
 # Run frontend development server
 cd frontend && npm run dev
 
@@ -124,7 +141,8 @@ cd frontend && npm run build  # Also runs type checking
 1. **eBPF Data Collection Layer**
    - `process.bpf.c`: Monitors system processes, executions, and file operations
    - `sslsniff.bpf.c`: Captures SSL/TLS traffic data with <3% performance overhead
-   - Both programs output structured JSON events to stdout
+   - `agentcgroup.bpf.c`: Detects tool-call exec/fork/exit via tracepoints
+   - All programs output structured JSON events to stdout
 
 2. **Rust Streaming Framework** (`collector/src/framework/`)
    - **Runners**: Execute eBPF binaries and stream events (SSL, Process, Fake, Agent, Combined)
@@ -132,7 +150,15 @@ cd frontend && npm run build  # Also runs type checking
    - **Core Events**: Standardized event format with rich metadata and JSON payloads
    - **Binary Extractor**: Manages embedded eBPF binaries with automatic cleanup
 
-3. **Frontend Visualization** (`frontend/`)
+3. **AgentCgroup Resource Controller** (`collector/src/cgroup/`)
+   - **ToolCallTracker** (Runner): Spawns agentcgroup eBPF binary, maps JSON → Event, drives cgroup ops
+   - **CgroupManager**: Creates/destroys per-tool-call cgroups under `/sys/fs/cgroup/agentcgroup/`
+   - **PolicyEngine**: Evaluates YAML-based degradation policies (throttle → freeze → kill)
+   - **MetricsCollector**: Thread-safe Prometheus counters/gauges/histograms
+   - **MetricsServer**: HTTP endpoint at `/metrics` (Prometheus) and `/api/metrics` (JSON)
+   - **Daemon**: Orchestrates all components with pressure monitoring background loop
+
+4. **Frontend Visualization** (`frontend/`)
    - Next.js/React application for real-time event visualization
    - Timeline view with log parsing and semantic event processing
    - TypeScript implementation with Tailwind CSS styling
