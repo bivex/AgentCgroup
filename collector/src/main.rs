@@ -798,7 +798,7 @@ async fn run_cgroup(
     monitor_interval_ms: u64,
     dry_run: bool,
     binary_path: Option<&str>,
-    verbose: bool,
+    _verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::cgroup::daemon::{Daemon, DaemonConfig};
 
@@ -810,7 +810,7 @@ async fn run_cgroup(
         Some(path) => path.to_string(),
         None => {
             // Try to find agentcgroup binary alongside the other BPF binaries
-            let extractor_dir = std::path::Path::new(binary_extractor.get_process_path())
+            let extractor_dir = binary_extractor.get_process_path()
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/bin"));
