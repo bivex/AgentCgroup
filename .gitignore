@@ -16,3 +16,11 @@ record.log.*
 
 # Log files
 *.log
+
+AgentCgroup.und/codecheck/configs/Background.json
+
+AgentCgroup.und/id.txt
+
+AgentCgroup.und/settings.xml
+
+understand-eIJQqt.svg
